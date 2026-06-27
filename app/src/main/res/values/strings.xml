@@ -2,6 +2,7 @@
     <string name="app_name">OpenLibreNFC</string>
     <string name="scan">Scan</string>
     <string name="reset_age">Reset Age</string>
+    <string name="reset_age_libre2">Reset (L2)</string>
     <string name="start">Start</string>
 
     <string name="dump_memory">Dump Memory</string>

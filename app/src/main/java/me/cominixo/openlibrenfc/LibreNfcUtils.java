@@ -2,6 +2,7 @@ package me.cominixo.openlibrenfc;
 
 import android.app.Activity;
 import android.nfc.tech.NfcV;
+import android.util.Log;
 import android.widget.Toast;
 
 import java.io.IOException;
@@ -18,42 +19,69 @@ public class LibreNfcUtils {
         mainActivityRef = new WeakReference<>(activity);
     }
 
+    private static final String TAG = "LibreNfcUtils";
+
     // Reads the F-RAM memory from the Libre
     public static byte[] readMemory(NfcV handle) {
 
         byte[] received = new byte[LibreConstants.MEMORY_SIZE];
 
-        // Loop through all blocks, 3 at a time
-        for (int i = 0; i < 43; i += 3){
+        Log.d(TAG, "Starting memory read...");
+
+        int bytesRead = 0;
+
+        // Read blocks in chunks of 3, but handle the end gracefully
+        for (int i = 0; i < 45; i += 3){
+
+            // Calculate how many blocks we can read (max 3, but less at the end)
+            int blocksToRead = Math.min(3, 45 - i);
 
             byte[] cmd = {
                     (byte) 0x02, // Flag for un-addressed communication
                     (byte) 0x23, // Read Multiple Blocks
                     (byte) i, // Start block
-                    (byte) 0x02 // Number of blocks to read (starts at 0 apparently, 2 is actually 3)
+                    (byte) (blocksToRead - 1) // Number of blocks (0-indexed)
             };
-
 
             byte[] response = sendCmd(handle, cmd);
 
-            // ignore first 0 to get 24 bytes (8 per block)
-            if (response.length == 25) {
-                System.arraycopy(response, 1, received, i * 8, response.length - 1);
-            } else {
-                // Some error while scanning, will just return an empty array
-                return new byte[0];
-            }
+            int expectedLen = 1 + (blocksToRead * 8); // 1 status byte + data
 
+            Log.d(TAG, "Block " + i + " (reading " + blocksToRead + ") response length: " + response.length + " data: " + bytesToHexStr(response));
+
+            if (response.length >= 2 && response[0] == 0x00) {
+                // Success - copy data (skip first status byte)
+                int dataToCopy = Math.min(response.length - 1, LibreConstants.MEMORY_SIZE - bytesRead);
+                System.arraycopy(response, 1, received, bytesRead, dataToCopy);
+                bytesRead += dataToCopy;
+            } else if (response.length >= 2 && response[0] == 0x01) {
+                // Error response - sensor may have fewer blocks, stop here
+                Log.w(TAG, "Sensor returned error at block " + i + ", stopping read. Bytes read so far: " + bytesRead);
+                break;
+            } else if (response.length == 0) {
+                Log.e(TAG, "Empty response at block " + i);
+                break;
+            }
         }
 
-        return received;
+        Log.d(TAG, "Memory read complete. Total bytes: " + bytesRead);
 
+        // Return what we got (may be partial for Libre 2)
+        if (bytesRead > 0) {
+            byte[] result = new byte[bytesRead];
+            System.arraycopy(received, 0, result, 0, bytesRead);
+            return result;
+        }
+
+        return new byte[0];
     }
 
     public static void writeMemory(NfcV handle, byte[] newMemory) {
+        // Calculate number of blocks based on actual memory size
+        int numBlocks = Math.min(43, newMemory.length / 8);
+        Log.d(TAG, "writeMemory: writing " + numBlocks + " blocks (" + newMemory.length + " bytes)");
 
-        unlock(handle);
-        for (int index = 0; index < 43; index++)
+        for (int index = 0; index < numBlocks; index++)
         {
 
             byte[] newData = new byte[8];
@@ -74,11 +102,17 @@ public class LibreNfcUtils {
 
             System.arraycopy(newData, 0, cmdWithBlocks, cmd.length, newData.length);
 
-            sendCmd(handle, cmdWithBlocks);
-
+            byte[] response = sendCmd(handle, cmdWithBlocks);
+            // Log write response - 0x00 = success, 0x01 = error
+            if (response.length > 0) {
+                Log.d(TAG, "Write block " + index + " response: " + bytesToHexStr(response));
+                if (response[0] != 0x00) {
+                    Log.e(TAG, "Write block " + index + " FAILED with error: " + String.format("0x%02X", response[0]));
+                }
+            } else {
+                Log.e(TAG, "Write block " + index + " got empty response");
+            }
         }
-
-        lock(handle);
     }
 
     public static byte[] sendCmd(NfcV handle, byte[] cmd) {
@@ -182,7 +216,11 @@ public class LibreNfcUtils {
 
         System.arraycopy(LibreConstants.PASSWORD, 0, cmdWithPassowrd, cmd.length, LibreConstants.PASSWORD.length);
 
-        sendCmd(handle, cmdWithPassowrd);
+        byte[] response = sendCmd(handle, cmdWithPassowrd);
+        Log.d(TAG, "Unlock response: " + bytesToHexStr(response) + " (length: " + response.length + ")");
+        if (response.length > 0 && response[0] != 0x00) {
+            Log.e(TAG, "Unlock FAILED with error: " + String.format("0x%02X", response[0]));
+        }
     }
 
     public static void lock(NfcV handle) {
@@ -198,7 +236,7 @@ public class LibreNfcUtils {
 
         System.arraycopy(LibreConstants.PASSWORD, 0, cmdWithPassowrd, cmd.length, LibreConstants.PASSWORD.length);
 
-        sendCmd(handle, cmdWithPassowrd);
-
+        byte[] response = sendCmd(handle, cmdWithPassowrd);
+        Log.d(TAG, "Lock response: " + bytesToHexStr(response) + " (length: " + response.length + ")");
     }
 }
